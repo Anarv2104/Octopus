@@ -1,0 +1,12 @@
+backend/
+├── app/
+│   ├── main.py               # FastAPI app entry
+│   ├── agents/               # Agent modules (DSA, AI, UX, etc.)
+│   ├── core/                 # Shared utilities, config
+│   ├── services/             # Memory, FKA, NeuroSync, etc.
+│   ├── models/               # Pydantic models
+│   └── routes/               # API endpoints
+├── Dockerfile
+├── requirements.txt
+└── README.md
+
