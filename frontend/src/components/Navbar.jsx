@@ -6,13 +6,13 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
 const Navbar = () => {
-  const { user } = useAuth();
+  const { user, logout } = useAuth(); // <- needs logout() in context
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const nav = useNavigate();
   const loc = useLocation();
 
   const isDashboard = loc.pathname === "/dashboard";
-  const showDashboardCta = !!user && !isDashboard;   // 👈 show only off-dashboard
+  const showDashboardCta = !!user && !isDashboard;
 
   const toggleNavbar = () => setMobileDrawerOpen((v) => !v);
 
@@ -22,8 +22,27 @@ const Navbar = () => {
       if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
     } else {
       nav(`/#${id}`);
+      setTimeout(() => {
+        const el = document.getElementById(id);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 0);
     }
     if (mobileDrawerOpen) setMobileDrawerOpen(false);
+  };
+
+  const handleLogout = async () => {
+    try {
+      if (typeof logout === "function") {
+        await logout();            // from AuthContext (recommended)
+      } else {
+        // fallback: clear token if you're storing it manually
+        localStorage.removeItem("idToken");
+      }
+      nav("/login");
+    } catch (err) {
+      console.error("Logout error:", err);
+      nav("/login");
+    }
   };
 
   return (
@@ -59,25 +78,28 @@ const Navbar = () => {
 
           {/* Desktop CTAs */}
           <div className="hidden lg:flex justify-center space-x-12 items-center">
-            {/* Only show Dashboard button when NOT on /dashboard */}
             {showDashboardCta && (
-              <Link
-                to="/dashboard"
-                className="py-2 px-3 border rounded-md"
-              >
+              <Link to="/dashboard" className="py-2 px-3 border rounded-md">
                 Dashboard
               </Link>
             )}
 
-            {/* Auth-aware secondary CTA */}
             {user ? (
-              <Link to="/logout" className="bg-gradient-to-r from-orange-500 to-orange-800 py-2 px-3 rounded-md">
+              <button
+                onClick={handleLogout}
+                className="bg-gradient-to-r from-orange-500 to-orange-800 py-2 px-3 rounded-md"
+              >
                 Logout
-              </Link>
+              </button>
             ) : (
               <>
-                <Link to="/login" className="py-2 px-3 border rounded-md">Sign In</Link>
-                <Link to="/signup" className="bg-gradient-to-r from-orange-500 to-orange-800 py-2 px-3 rounded-md">
+                <Link to="/login" className="py-2 px-3 border rounded-md">
+                  Sign In
+                </Link>
+                <Link
+                  to="/signup"
+                  className="bg-gradient-to-r from-orange-500 to-orange-800 py-2 px-3 rounded-md"
+                >
                   Create an account
                 </Link>
               </>
@@ -119,7 +141,6 @@ const Navbar = () => {
             </ul>
 
             <div className="flex space-x-6 mt-6">
-              {/* Same rule on mobile */}
               {showDashboardCta && (
                 <Link
                   to="/dashboard"
@@ -131,13 +152,15 @@ const Navbar = () => {
               )}
 
               {user ? (
-                <Link
-                  to="/logout"
-                  onClick={() => setMobileDrawerOpen(false)}
+                <button
+                  onClick={() => {
+                    setMobileDrawerOpen(false);
+                    handleLogout();
+                  }}
                   className="py-2 px-3 rounded-md bg-gradient-to-r from-orange-500 to-orange-800"
                 >
                   Logout
-                </Link>
+                </button>
               ) : (
                 <>
                   <Link
