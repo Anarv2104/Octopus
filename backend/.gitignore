@@ -1,0 +1,22 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+logs
+*.log
+pnpm-debug.log*
+
+# Build
+dist/
+build/
+
+# Cache
+.cache/
