@@ -1,42 +1,82 @@
 // backend/lib/extractText.js
 import path from "path";
+import { spawn } from "child_process";
 
-// Lazy-import heavy parsers so the server can start even if not installed yet
-let pdfParse = null;
-let mammoth = null;
+// Lazy ESM loaders (so server boots even if optional deps absent)
+let pdfjs = null;
+let mammothMod = null;
 
-async function loadPdfParse() {
-  if (!pdfParse) {
-    ({ default: pdfParse } = await import("pdf-parse")); // ESM default
+async function loadPdfJs() {
+  if (!pdfjs) {
+    pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   }
-  return pdfParse;
+  return pdfjs;
 }
 
 async function loadMammoth() {
-  if (!mammoth) {
-    ({ default: mammoth } = await import("mammoth")); // ESM default
+  if (!mammothMod) {
+    const mod = await import("mammoth");
+    mammothMod = mod.default || mod;
   }
-  return mammoth;
+  return mammothMod;
+}
+
+const cap = (s, n = 20000) => (s || "").slice(0, n);
+
+/** Try Poppler's pdftotext via stdin/stdout. Returns "" if unavailable/fails. */
+function pdfToTextWithPoppler(buffer) {
+  return new Promise((resolve) => {
+    try {
+      const p = spawn("pdftotext", ["-layout", "-q", "-", "-"]); // read stdin → write stdout
+      let out = "";
+      let err = "";
+
+      p.stdout.on("data", (d) => (out += d.toString("utf8")));
+      p.stderr.on("data", (d) => (err += d.toString("utf8")));
+      p.on("error", () => resolve("")); // command not found, permission, etc.
+      p.on("close", () => resolve(out || "")); // return whatever we got
+
+      p.stdin.write(buffer);
+      p.stdin.end();
+    } catch {
+      resolve("");
+    }
+  });
+}
+
+/** Fallback: pdfjs-dist (no worker in Node) */
+async function pdfToTextWithPdfjs(buffer) {
+  try {
+    const { getDocument } = await loadPdfJs();
+    const loadingTask = getDocument({
+      data: buffer,
+      disableWorker: true,
+      isEvalSupported: false,
+    });
+    const pdf = await loadingTask.promise;
+
+    let combined = "";
+    const MAX_PAGES = Math.min(pdf.numPages, 10);
+    for (let i = 1; i <= MAX_PAGES; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const strings = content.items?.map((it) => it.str).filter(Boolean) || [];
+      combined += strings.join(" ") + "\n";
+    }
+    return combined;
+  } catch {
+    return "";
+  }
 }
 
 export async function extractText(buffer, filePath) {
   const lower = (filePath || "").toLowerCase();
+  const ext = path.extname(lower);
 
   // Plain text-ish
   if (/\.(txt|md|csv|json)$/.test(lower)) {
     try {
-      return buffer.toString("utf8").slice(0, 20000);
-    } catch {
-      return "";
-    }
-  }
-
-  // PDF
-  if (lower.endsWith(".pdf")) {
-    try {
-      const parse = await loadPdfParse();
-      const { text } = await parse(buffer);
-      return (text || "").slice(0, 20000);
+      return cap(buffer.toString("utf8"));
     } catch {
       return "";
     }
@@ -45,17 +85,31 @@ export async function extractText(buffer, filePath) {
   // DOCX
   if (lower.endsWith(".docx")) {
     try {
-      const m = await loadMammoth();
-      const { value } = await m.extractRawText({ buffer });
-      return (value || "").slice(0, 20000);
+      const mammoth = await loadMammoth();
+      const { value } = await mammoth.extractRawText({ buffer });
+      return cap(value);
     } catch {
       return "";
     }
   }
 
-  // Fallback (unknown type)
+  // PDF
+  if (lower.endsWith(".pdf")) {
+    // 1) Poppler (best)
+    const popplerText = await pdfToTextWithPoppler(buffer);
+    if (popplerText?.trim()) return cap(popplerText);
+
+    // 2) pdfjs-dist fallback
+    const pdfjsText = await pdfToTextWithPdfjs(buffer);
+    if (pdfjsText?.trim()) return cap(pdfjsText);
+
+    // 3) last resort
+    return "";
+  }
+
+  // Unknown types → try utf8
   try {
-    return buffer.toString("utf8").slice(0, 20000);
+    return cap(buffer.toString("utf8"));
   } catch {
     return "";
   }

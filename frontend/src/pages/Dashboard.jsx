@@ -23,7 +23,7 @@ export default function Dashboard() {
   const [fileMeta, setFileMeta] = useState(null); // { fileId, url, originalName, size, mimetype }
   const [uploading, setUploading] = useState(false);
 
-  // summary modal state
+  // summary modal state (optional nicety)
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [summaryText, setSummaryText] = useState("");
 
@@ -196,7 +196,7 @@ export default function Dashboard() {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf,.txt,.md,.doc,.docx,.csv,.json,.ppt,.pptx,image/*"
+              accept=".pdf,.docx,.txt,.md,.csv,.json,.ppt,.pptx,image/*"
               className="hidden"
               onChange={onFileChange}
             />
