@@ -3,6 +3,9 @@ import express from "express";
 import cors from "cors";
 import admin from "firebase-admin";
 
+import { initBus } from "./lib/agentBus.js";
+import { executeRun } from "./orchestrator/supervisor.js";
+
 const app = express();
 app.use(express.json());
 app.use(
@@ -17,7 +20,7 @@ if (!admin.apps.length) {
     credential: admin.credential.cert({
       projectId: process.env.FIREBASE_PROJECT_ID,
       clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"), // safety
+      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
     }),
   });
 }
@@ -29,9 +32,9 @@ async function requireAuth(req, res, next) {
   if (!token) return res.status(401).json({ error: "Missing token" });
   try {
     const decoded = await admin.auth().verifyIdToken(token);
-    req.user = decoded; // uid, email, etc
+    req.user = decoded;
     next();
-  } catch (e) {
+  } catch {
     return res.status(401).json({ error: "Invalid token" });
   }
 }
@@ -43,12 +46,13 @@ app.get("/auth/me", requireAuth, (req, res) => {
   res.json({ uid, email, name: name || null });
 });
 
-// POST /runs -> create a new run (id + steps)
-app.post("/runs", requireAuth, async (req, res) => {
+// create run
+app.post("/runs", requireAuth, (req, res) => {
   const { instruction, tools } = req.body || {};
   if (!instruction || !Array.isArray(tools) || tools.length === 0) {
     return res.status(400).json({ error: "instruction + tools required" });
   }
+
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const steps = tools.map((tool, idx) => ({
     id: `${tool}-${idx}`,
@@ -57,47 +61,41 @@ app.post("/runs", requireAuth, async (req, res) => {
     link: null,
     error: null,
   }));
-  req.app.locals.runs ||= {};
-  req.app.locals.runs[id] = {
+
+  const runs = (app.locals.runs ||= {});
+  runs[id] = {
     id,
     uid: req.user.uid,
     instruction,
     steps,
+    log: [],        // bus messages
+    memory: {},     // shared per-run memory
+    status: "created",
     createdAt: Date.now(),
   };
+
   res.json({ id });
 });
 
-// GET /runs/:id -> current status
+// get run
 app.get("/runs/:id", requireAuth, (req, res) => {
-  const run = (req.app.locals.runs || {})[req.params.id];
+  const run = (app.locals.runs || {})[req.params.id];
   if (!run || run.uid !== req.user.uid) return res.status(404).json({ error: "not found" });
   res.json(run);
 });
 
-// POST /runs/:id/execute -> simulate sequential success
+// execute run (async)
 app.post("/runs/:id/execute", requireAuth, async (req, res) => {
-  const store = req.app.locals.runs || {};
-  const run = store[req.params.id];
+  const run = (app.locals.runs || {})[req.params.id];
   if (!run || run.uid !== req.user.uid) return res.status(404).json({ error: "not found" });
 
-  const LINKS = {
-    notion: "https://www.notion.so/your-demo-page",
-    sheets: "https://docs.google.com/spreadsheets/d/DEMO",
-    github: "https://github.com/your/repo/issues",
-    slack: "https://app.slack.com/client/T000/C000/p000",
-    email: "mailto:someone@example.com",
-    summarizer: "https://octopus.example/summaries/demo",
-  };
+  setImmediate(() => {
+    executeRun(app, req.params.id).catch((e) => console.error("executeRun error:", e));
+  });
 
-  for (const step of run.steps) {
-    await new Promise((r) => setTimeout(r, 700));
-    step.status = "done";
-    step.link = LINKS[step.tool] || "#";
-    step.error = null;
-  }
   res.json({ ok: true });
 });
 
 const port = process.env.PORT || 3001;
+initBus(app);
 app.listen(port, () => console.log(`API on :${port}`));
