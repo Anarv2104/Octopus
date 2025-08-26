@@ -1,5 +1,3 @@
-// frontend/src/lib/api.js
-
 // Normalize base URL (removes trailing / if present)
 export const API = (import.meta.env.VITE_API_URL || "http://localhost:3001").replace(/\/+$/, "");
 
@@ -8,6 +6,18 @@ export function authHeaders(idToken) {
     Authorization: `Bearer ${idToken}`,
     "Content-Type": "application/json",
   };
+}
+
+export async function uploadFile(idToken, file) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch(`${API}/upload`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${idToken}` }, // don't set Content-Type here
+    body: fd,
+  });
+  if (!res.ok) throw new Error(`upload failed: ${res.status}`);
+  return res.json(); // { fileId, url, originalName, ... }
 }
 
 export async function createRun(idToken, payload) {

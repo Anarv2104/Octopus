@@ -1,19 +1,34 @@
 // backend/agents/index.js
-import { handle as summarizer } from "./summarizer.stub.js";
-import { handle as notion } from "./notion.stub.js";
-import { handle as slack } from "./slack.stub.js";
-import { handle as github } from "./github.stub.js";
-import { handle as email } from "./email.stub.js";
-import { handle as sheets } from "./sheets.stub.js";
+import { summarizerAgent } from "./summarizer.js";
 
-const registry = { summarizer, notion, slack, github, email, sheets };
+/**
+ * Minimal stubs for non-summarizer tools.
+ * Replace these with real integrations later.
+ */
+const stubs = {
+  notion: async (_ctx) => ({ link: "#", payload: { ok: true, note: "notion (stub)" } }),
+  sheets: async (_ctx) => ({ link: "#", payload: { ok: true, note: "sheets (stub)" } }),
+  github: async (_ctx) => ({ link: "#", payload: { ok: true, note: "github (stub)" } }),
+  slack:  async (_ctx) => ({ link: "#", payload: { ok: true, note: "slack (stub)" } }),
+  email:  async (_ctx) => ({ link: "#", payload: { ok: true, note: "email (stub)" } }),
+};
 
-export function hasAgent(name) {
-  return Boolean(registry[name]);
-}
-
+/**
+ * Single source of truth for running agents.
+ * `ctx` should include:
+ *   - instruction: string
+ *   - memory: object (may contain `fileUrl` if a file was attached)
+ */
 export async function runAgent(tool, ctx) {
-  const h = registry[tool];
-  if (!h) throw new Error(`Unknown agent: ${tool}`);
-  return await h(ctx);
+  if (tool === "summarizer") {
+    // summarizerAgent reads ctx.memory.fileUrl internally
+    return summarizerAgent(ctx);
+  }
+
+  if (stubs[tool]) {
+    return stubs[tool](ctx);
+  }
+
+  // Unknown tool
+  return { link: "#", payload: { ok: false, note: `Unknown tool: ${tool}` } };
 }
