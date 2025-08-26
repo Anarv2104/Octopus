@@ -1,3 +1,4 @@
+// frontend/src/pages/Dashboard.jsx
 import { useState, useEffect, useRef } from "react";
 import PropTypes from "prop-types";
 import { Paperclip, X, Loader2 } from "lucide-react";
@@ -22,12 +23,16 @@ export default function Dashboard() {
   const [fileMeta, setFileMeta] = useState(null); // { fileId, url, originalName, size, mimetype }
   const [uploading, setUploading] = useState(false);
 
-  // UI helpers
+  // summary modal state
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryText, setSummaryText] = useState("");
+
+  // ui helpers
   const pollTimer = useRef(null);
   const fileInputRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
 
-  // 🔹 Derive tools from instruction AND whether a file is attached
+  // derive tools from instruction + whether a file is attached
   useEffect(() => {
     setTools(planTools(instruction, !!fileMeta));
   }, [instruction, fileMeta]);
@@ -90,6 +95,7 @@ export default function Dashboard() {
     setDragOver(false);
     if (!e.dataTransfer.files?.length) return;
     const f = e.dataTransfer.files[0];
+    // simulate file input selection
     const dt = new DataTransfer();
     dt.items.add(f);
     if (fileInputRef.current) {
@@ -125,15 +131,6 @@ export default function Dashboard() {
       setLoading(false);
       setErr(e.message || "Something went wrong");
     }
-  };
-
-  // 🔹 Summary modal state
-  const [summaryOpen, setSummaryOpen] = useState(false);
-  const [summaryText, setSummaryText] = useState("");
-
-  const openSummary = (text) => {
-    setSummaryText(text || "");
-    setSummaryOpen(true);
   };
 
   return (
@@ -254,38 +251,37 @@ export default function Dashboard() {
               <StepRow
                 key={step.id}
                 step={step}
-                onViewSummary={
-                  step.tool === "summarizer" && step.payload?.summary
-                    ? () => openSummary(step.payload.summary)
-                    : undefined
-                }
+                onShowSummary={(text) => {
+                  setSummaryText(text);
+                  setSummaryOpen(true);
+                }}
               />
             ))}
           </div>
         </div>
       )}
 
-      {/* 🔹 Summary Modal */}
+      {/* Summary modal */}
       {summaryOpen && (
-        <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm grid place-items-center p-4">
-          <div className="w-full max-w-2xl rounded-2xl border border-neutral-800 bg-[#111] p-6">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">Document Summary</h3>
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-white/10 bg-[#111111]">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-white/10">
+              <h3 className="text-lg font-medium">Summary</h3>
               <button
                 onClick={() => setSummaryOpen(false)}
-                className="h-8 w-8 grid place-items-center rounded-full hover:bg-white/10"
+                className="h-8 w-8 grid place-items-center rounded-md hover:bg-white/10"
                 aria-label="Close"
               >
-                <X className="h-5 w-5 text-white/70" />
+                <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="mt-4 whitespace-pre-wrap text-white/80 leading-7 text-[15px]">
-              {summaryText || "(empty)"}
+            <div className="p-5 max-h-[70vh] overflow-auto whitespace-pre-wrap text-white/80">
+              {summaryText}
             </div>
-            <div className="mt-6 flex justify-end">
+            <div className="p-4 border-t border-white/10 flex justify-end">
               <button
                 onClick={() => setSummaryOpen(false)}
-                className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700"
+                className="rounded-md px-4 py-2 border border-white/10 hover:bg-white/10"
               >
                 Close
               </button>
@@ -321,10 +317,11 @@ function SpinnerDots() {
   );
 }
 
-function StepRow({ step, onViewSummary }) {
+function StepRow({ step, onShowSummary }) {
   const isDone = step.status === "done";
   const isFail = step.status === "failed";
   const isPending = !isDone && !isFail;
+  const hasSummary = !!step?.payload?.summary;
 
   return (
     <div className="flex items-center justify-between rounded-2xl bg-[#141414] border border-white/5 px-5 py-4">
@@ -340,11 +337,10 @@ function StepRow({ step, onViewSummary }) {
       </div>
 
       <div className="flex items-center gap-3">
-        {/* If summarizer returned text, offer a “View summary” button */}
-        {isDone && onViewSummary && (
+        {isDone && hasSummary && (
           <button
-            onClick={onViewSummary}
-            className="px-3 py-1.5 rounded-lg border border-neutral-700 hover:bg-neutral-800 text-sm"
+            onClick={() => onShowSummary(step.payload.summary)}
+            className="text-sm rounded-md border border-white/10 px-3 py-1 hover:bg-white/5"
           >
             View summary
           </button>
@@ -370,7 +366,7 @@ function StepRow({ step, onViewSummary }) {
 }
 StepRow.propTypes = {
   step: PropTypes.object.isRequired,
-  onViewSummary: PropTypes.func,
+  onShowSummary: PropTypes.func,
 };
 
 function labelFor(tool) {
