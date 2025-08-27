@@ -10,6 +10,17 @@ export async function executeRun(app, runId) {
   if (!run) throw new Error("run not found");
   run.status = "running";
 
+  // --- NEW: make sure summarizer (if present) always runs first
+  if (Array.isArray(run.steps) && run.steps.length > 1) {
+    run.steps.sort((a, b) => {
+      const aSumm = a.tool === "summarizer";
+      const bSumm = b.tool === "summarizer";
+      if (aSumm && !bSumm) return -1;
+      if (bSumm && !aSumm) return 1;
+      return 0;
+    });
+  }
+
   for (const step of run.steps) {
     step.status = "running";
 
@@ -22,6 +33,7 @@ export async function executeRun(app, runId) {
 
     try {
       const result = await runAgent(step.tool, {
+        uid: run.uid,
         instruction: run.instruction,
         memory: run.memory || {},
       });
@@ -33,7 +45,6 @@ export async function executeRun(app, runId) {
       step.error = null;
       step.status = "done";
 
-      // if summarizer and we had a file, ensure link points to file
       if (step.tool === "summarizer" && run.fileUrl) step.link = run.fileUrl;
 
       publish(runId, msg({

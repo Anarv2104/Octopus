@@ -1,10 +1,19 @@
 // frontend/src/pages/Dashboard.jsx
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import PropTypes from "prop-types";
-import { Paperclip, X, Loader2 } from "lucide-react";
+import { getAuth } from "firebase/auth";
+import { Paperclip, X, Loader2, Link as LinkIcon, CheckCircle2, ArrowRight } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { planTools } from "../lib/planner";
-import { createRun, getRun, executeRun, uploadFile } from "../lib/api";
+import {
+  createRun,
+  getRun,
+  executeRun,
+  uploadFile,
+  API,
+  getIntegrations,
+  disconnectGoogle,   // ⬅️ NEW
+} from "../lib/api";
 
 export default function Dashboard() {
   const { idToken } = useAuth();
@@ -20,26 +29,30 @@ export default function Dashboard() {
   const [err, setErr] = useState("");
 
   // file state
-  const [fileMeta, setFileMeta] = useState(null); // { fileId, url, originalName, size, mimetype }
+  const [fileMeta, setFileMeta] = useState(null);
   const [uploading, setUploading] = useState(false);
 
-  // summary modal state (optional nicety)
+  // summary modal
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [summaryText, setSummaryText] = useState("");
+
+  // integrations
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [checkingIntegrations, setCheckingIntegrations] = useState(false);
 
   // ui helpers
   const pollTimer = useRef(null);
   const fileInputRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
 
-  // derive tools from instruction + whether a file is attached
+  /* ---------- derive tools ---------- */
   useEffect(() => {
     setTools(planTools(instruction, !!fileMeta));
   }, [instruction, fileMeta]);
 
   const allDone = (r) => r?.steps?.every((s) => s.status === "done" || s.status === "failed");
 
-  // continuous polling while a run is active
+  /* ---------- poll run ---------- */
   useEffect(() => {
     if (!runId || !idToken) return;
     let aborted = false;
@@ -67,24 +80,80 @@ export default function Dashboard() {
     };
   }, [runId, idToken]);
 
-  /* ---------------- File upload ---------------- */
+  /* ---------- integrations status ---------- */
+  const refreshIntegrations = useCallback(async () => {
+    if (!idToken) return;
+    try {
+      setCheckingIntegrations(true);
+      const data = await getIntegrations(idToken);
+      setGoogleConnected(!!data?.google?.connected);
+    } catch {
+      // ignore
+    } finally {
+      setCheckingIntegrations(false);
+    }
+  }, [idToken]);
 
+  useEffect(() => {
+    refreshIntegrations();
+    const onFocus = () => refreshIntegrations();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refreshIntegrations]);
+
+  /* ---------- Integrations: Google (with fresh Firebase ID token) ---------- */
+  const connectGoogle = async () => {
+    try {
+      const auth = getAuth();
+      const user = auth.currentUser;
+      if (!user) {
+        setErr("Please sign in again to connect Google.");
+        return;
+      }
+      setCheckingIntegrations(true); // instant feedback
+
+      // Force a fresh Firebase ID token so backend never sees an expired one.
+      const freshIdToken = await user.getIdToken(true);
+      const url = `${API}/oauth/google/start?idToken=${encodeURIComponent(freshIdToken)}`;
+      window.open(url, "_blank", "noopener,noreferrer");
+
+      // When you come back to the tab, the focus listener above will re-check status.
+    } catch (e) {
+      setErr("Failed to start Google connection: " + (e?.message || "unknown error"));
+      setCheckingIntegrations(false);
+    }
+  };
+
+  /* ---------- NEW: Disconnect Google ---------- */
+  const disconnect = async () => {
+    try {
+      setErr("");
+      setCheckingIntegrations(true);
+      await disconnectGoogle(idToken);
+      setGoogleConnected(false);
+    } catch (e) {
+      setErr(e?.message || "Failed to disconnect Google");
+    } finally {
+      setCheckingIntegrations(false);
+    }
+  };
+
+  /* ---------- File upload ---------- */
   const openFilePicker = () => fileInputRef.current?.click();
 
   const onFileChange = async (e) => {
     const f = e.target.files?.[0];
     if (!f || !idToken) return;
-
     try {
       setUploading(true);
       setErr("");
       const meta = await uploadFile(idToken, f);
-      setFileMeta(meta); // { fileId, url, originalName, size, mimetype }
+      setFileMeta(meta);
     } catch (error) {
       setErr(error?.message || "Upload failed");
     } finally {
       setUploading(false);
-      e.target.value = ""; // reset so same file can be re-picked
+      e.target.value = "";
     }
   };
 
@@ -95,7 +164,6 @@ export default function Dashboard() {
     setDragOver(false);
     if (!e.dataTransfer.files?.length) return;
     const f = e.dataTransfer.files[0];
-    // simulate file input selection
     const dt = new DataTransfer();
     dt.items.add(f);
     if (fileInputRef.current) {
@@ -104,8 +172,7 @@ export default function Dashboard() {
     }
   };
 
-  /* ---------------- Run flow ---------------- */
-
+  /* ---------- Run flow ---------- */
   const startRun = async () => {
     setErr("");
     if (!instruction.trim()) return;
@@ -124,8 +191,6 @@ export default function Dashboard() {
 
       const { id } = await createRun(idToken, payload);
       setRunId(id);
-
-      // fire-and-forget; poller will pick it up
       await executeRun(idToken, id);
     } catch (e) {
       setLoading(false);
@@ -147,14 +212,11 @@ export default function Dashboard() {
           </span>
         </h1>
 
-        {/* pill input */}
+        {/* pill input + attach + run */}
         <div
           className={`relative rounded-full p-[2px] ring-1 ring-[#ff6a2b]/40 shadow-[0_0_120px_rgba(255,90,0,.18)] max-w-5xl
             ${dragOver ? "ring-2 ring-orange-400/80 shadow-[0_0_160px_rgba(255,120,50,.25)]" : ""}`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={onDrop}
         >
@@ -166,7 +228,6 @@ export default function Dashboard() {
               className="flex-1 bg-transparent outline-none placeholder-white/30 text-white text-base md:text-lg"
             />
 
-            {/* Attach icon button */}
             <button
               type="button"
               onClick={openFilePicker}
@@ -181,7 +242,6 @@ export default function Dashboard() {
               )}
             </button>
 
-            {/* Run */}
             <button
               onClick={startRun}
               disabled={loading || uploading || !instruction.trim()}
@@ -192,7 +252,6 @@ export default function Dashboard() {
               {loading ? "Running…" : "Run"}
             </button>
 
-            {/* hidden file input */}
             <input
               ref={fileInputRef}
               type="file"
@@ -209,9 +268,7 @@ export default function Dashboard() {
             <div className="inline-flex items-center gap-2 rounded-full border border-neutral-800 bg-neutral-900/70 px-3 py-1.5">
               <span className="text-white/80 text-sm truncate max-w-[60vw] md:max-w-[420px]">
                 {fileMeta.originalName}{" "}
-                <span className="text-white/40">
-                  ({prettySize(fileMeta.size)})
-                </span>
+                <span className="text-white/40">({prettySize(fileMeta.size)})</span>
               </span>
               <button
                 onClick={removeFile}
@@ -224,10 +281,65 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* helper lines */}
+        {/* examples */}
         <div className="mt-6 md:mt-8 text-white/60 space-y-1 text-sm md:text-base">
           <p>e.g. Summarize this report (attach PDF) and add to Notion</p>
           <p>e.g. Create tasks in GitHub from roadmap, share update to Slack</p>
+        </div>
+
+        {/* integrations block – on-brand card */}
+        <div className="mt-6">
+          <div className="rounded-2xl border border-white/10 bg-[#0f0f0f] p-4 md:p-5 shadow-[0_0_50px_rgba(255,90,0,0.06)]">
+            <div className="flex flex-col md:flex-row md:items-center gap-4">
+              {/* Left: title */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm uppercase tracking-wider text-white/50">Integrations</span>
+              </div>
+
+              {/* Middle: Google chip */}
+              <div className="flex items-center gap-3 md:ml-2">
+                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/40 px-3 py-1.5">
+                  {googleConnected ? (
+                    <>
+                      <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                      <span className="text-sm text-white/80">Google Connected</span>
+                      <button
+                        type="button"
+                        onClick={disconnect}
+                        disabled={checkingIntegrations}
+                        className="text-xs rounded-md border border-rose-500/40 text-rose-300 px-2.5 py-1 hover:bg-rose-500/10"
+                        title="Disconnect Google"
+                      >
+                        {checkingIntegrations ? "Working…" : "Disconnect"}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-sm text-white/80">Google (Sheets & Gmail)</span>
+                      <button
+                        type="button"
+                        onClick={connectGoogle}
+                        disabled={checkingIntegrations}
+                        className="text-xs rounded-md border border-white/10 px-2.5 py-1 hover:bg-white/5"
+                        title="Connect Google Sheets & Gmail"
+                      >
+                        {checkingIntegrations ? "Checking…" : "Connect"}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Right: helper hint */}
+              <div className="md:ml-auto flex items-center gap-2 text-[12px] text-white/40">
+                <LinkIcon className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">
+                  Try <em>“Email this summary to me”</em> or <em>“Append summary to Google Sheet”</em>.
+                </span>
+                <ArrowRight className="h-3.5 w-3.5 hidden sm:block" />
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* tool preview */}

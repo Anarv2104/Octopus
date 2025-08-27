@@ -3,13 +3,15 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import admin from "firebase-admin";
-
 import fs from "fs";
 import path from "path";
 import multer from "multer";
+import { google } from "googleapis";
 
 import { initBus } from "./lib/agentBus.js";
 import { executeRun } from "./orchestrator/supervisor.js";
+import { router as googleOAuthRouter } from "./oauth/google.js";
+import { getIntegration, deleteIntegration } from "./lib/db.js";
 
 const app = express();
 app.use(express.json());
@@ -29,7 +31,8 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-const PUBLIC_BASE = process.env.BACKEND_PUBLIC_URL || `http://localhost:${process.env.PORT || 3001}`;
+const PUBLIC_BASE =
+  process.env.BACKEND_PUBLIC_URL || `http://localhost:${process.env.PORT || 3001}`;
 
 /* ---------- Firebase Admin ---------- */
 if (!admin.apps.length) {
@@ -41,6 +44,9 @@ if (!admin.apps.length) {
     }),
   });
 }
+
+/* ---------- OAuth routes ---------- */
+app.use("/oauth/google", googleOAuthRouter);
 
 /* ---------- Auth middleware ---------- */
 async function requireAuth(req, res, next) {
@@ -57,10 +63,49 @@ async function requireAuth(req, res, next) {
 }
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
-
 app.get("/auth/me", requireAuth, (req, res) => {
   const { uid, email, name } = req.user;
   res.json({ uid, email, name: name || null });
+});
+
+/* ---------- Integrations status ---------- */
+app.get("/integrations", requireAuth, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const g = await getIntegration(uid, "google");
+    res.json({
+      google: {
+        connected: !!(g && (g.access_token || g.refresh_token)),
+        email: g?.email || null,
+        updatedAt: g?.updatedAt || null,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* ---------- Disconnect Google (revokes + clears) ---------- */
+app.post("/integrations/google/disconnect", requireAuth, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const g = await getIntegration(uid, "google");
+    if (g?.access_token || g?.refresh_token) {
+      const oauth = new google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        process.env.GOOGLE_REDIRECT_URI
+      );
+      const token = g.refresh_token || g.access_token;
+      if (token) {
+        try { await oauth.revokeToken(token); } catch { /* ignore network errors */ }
+      }
+    }
+    await deleteIntegration(uid, "google");
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 /* ---------- Upload API ---------- */
@@ -69,8 +114,7 @@ app.post("/upload", requireAuth, upload.single("file"), (req, res) => {
   const fileId = req.file.filename;
   const url = `${PUBLIC_BASE}/uploads/${fileId}`;
   res.json({
-    fileId,
-    url,
+    fileId, url,
     originalName: req.file.originalname,
     mimetype: req.file.mimetype,
     size: req.file.size,
@@ -103,7 +147,7 @@ app.post("/runs", requireAuth, (req, res) => {
     instruction,
     steps,
     log: [],
-    memory: { ...(fileUrl ? { fileUrl } : {}) }, // <— make file visible to agents
+    memory: { ...(fileUrl ? { fileUrl } : {}) },
     status: "created",
     fileId: fileId || null,
     fileUrl,
