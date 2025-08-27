@@ -1,39 +1,7 @@
 // backend/agents/email.real.js
 import { google } from "googleapis";
-import { getIntegration, setIntegration } from "../lib/db.js";
-
-function buildOAuthClient() {
-  return new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
-  );
-}
-
-async function asGoogleClient(uid) {
-  const oauth = buildOAuthClient();
-  const g = await getIntegration(uid, "google");
-  if (!g?.access_token) throw new Error("Google account not connected");
-
-  oauth.setCredentials({
-    access_token: g.access_token,
-    refresh_token: g.refresh_token,
-    expiry_date: g.expiry_date || 0,
-  });
-
-  // persist refreshed tokens
-  oauth.on("tokens", async (tokens) => {
-    if (tokens.refresh_token || tokens.access_token) {
-      await setIntegration(uid, "google", {
-        access_token: tokens.access_token ?? g.access_token,
-        refresh_token: tokens.refresh_token ?? g.refresh_token,
-        expiry_date: Date.now() + (tokens.expires_in || 0) * 1000,
-      });
-    }
-  });
-
-  return oauth;
-}
+import { getIntegration } from "../lib/db.js";
+import { asGoogleClient } from "../lib/googleAuth.js";
 
 function base64Url(str) {
   return Buffer.from(str).toString("base64")
@@ -55,6 +23,7 @@ function extractRecipientFromInstruction(instruction = "") {
 export async function emailRealAgent(ctx) {
   const { uid, instruction, memory } = ctx;
 
+  // OAuth client with: load tokens, auto-refresh, persist refreshed tokens
   const auth = await asGoogleClient(uid);
   const gmail = google.gmail({ version: "v1", auth });
 

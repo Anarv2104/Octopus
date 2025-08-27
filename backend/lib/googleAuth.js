@@ -30,12 +30,13 @@ export async function asGoogleClient(uid) {
     scope: saved.scope || undefined,
   });
 
-  // Persist any refreshed tokens
+  // Persist any refreshed tokens without losing known fields (like email/scope)
   oauth.on("tokens", async (tokens) => {
     const updated = {
-      access_token: tokens.access_token ?? saved.access_token,
-      refresh_token: tokens.refresh_token ?? saved.refresh_token,
+      access_token: tokens.access_token ?? saved.access_token ?? null,
+      refresh_token: tokens.refresh_token ?? saved.refresh_token ?? null,
       scope: tokens.scope ?? saved.scope,
+      email: saved.email ?? null,
     };
     if (typeof tokens.expiry_date === "number") {
       updated.expiry_date = tokens.expiry_date;
@@ -47,11 +48,14 @@ export async function asGoogleClient(uid) {
     await setIntegration(uid, "google", updated);
   });
 
-  // Proactive refresh if missing/near expiry (<60s left)
-  const needsRefresh =
-    !saved.expiry_date || (Date.now() > (saved.expiry_date - 60_000));
+  // Proactive refresh if missing/near expiry (<60s left) and we have a refresh_token
+  const needsRefresh = !saved.expiry_date || (Date.now() > (saved.expiry_date - 60_000));
   if (needsRefresh && saved.refresh_token) {
-    await oauth.getAccessToken(); // triggers refresh under the hood
+    try {
+      await oauth.getAccessToken(); // triggers refresh under the hood
+    } catch {
+      // non-fatal: Gmail/Sheets calls will also refresh on first API call
+    }
   }
 
   return oauth;

@@ -12,7 +12,7 @@ import {
   uploadFile,
   API,
   getIntegrations,
-  disconnectGoogle,   // ⬅️ NEW
+  disconnectGoogle,
 } from "../lib/api";
 
 export default function Dashboard() {
@@ -38,6 +38,7 @@ export default function Dashboard() {
 
   // integrations
   const [googleConnected, setGoogleConnected] = useState(false);
+  const [googleEmail, setGoogleEmail] = useState(null); // <-- NEW
   const [checkingIntegrations, setCheckingIntegrations] = useState(false);
 
   // ui helpers
@@ -87,6 +88,7 @@ export default function Dashboard() {
       setCheckingIntegrations(true);
       const data = await getIntegrations(idToken);
       setGoogleConnected(!!data?.google?.connected);
+      setGoogleEmail(data?.google?.email || null); // <-- NEW
     } catch {
       // ignore
     } finally {
@@ -116,21 +118,21 @@ export default function Dashboard() {
       const freshIdToken = await user.getIdToken(true);
       const url = `${API}/oauth/google/start?idToken=${encodeURIComponent(freshIdToken)}`;
       window.open(url, "_blank", "noopener,noreferrer");
-
-      // When you come back to the tab, the focus listener above will re-check status.
+      // Status re-checks on focus (above)
     } catch (e) {
       setErr("Failed to start Google connection: " + (e?.message || "unknown error"));
       setCheckingIntegrations(false);
     }
   };
 
-  /* ---------- NEW: Disconnect Google ---------- */
+  /* ---------- Disconnect Google ---------- */
   const disconnect = async () => {
     try {
       setErr("");
       setCheckingIntegrations(true);
       await disconnectGoogle(idToken);
       setGoogleConnected(false);
+      setGoogleEmail(null);
     } catch (e) {
       setErr(e?.message || "Failed to disconnect Google");
     } finally {
@@ -302,7 +304,9 @@ export default function Dashboard() {
                   {googleConnected ? (
                     <>
                       <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                      <span className="text-sm text-white/80">Google Connected</span>
+                      <span className="text-sm text-white/80">
+                        Google Connected{googleEmail ? ` — ${googleEmail}` : ""}
+                      </span>
                       <button
                         type="button"
                         onClick={disconnect}
@@ -406,7 +410,6 @@ export default function Dashboard() {
 }
 
 /* ---------- UI bits ---------- */
-
 function PendingBadge() {
   return (
     <span className="inline-flex items-center gap-2 text-white/80">
@@ -418,7 +421,6 @@ function PendingBadge() {
     </span>
   );
 }
-
 function SpinnerDots() {
   return (
     <span className="inline-flex items-center gap-1.5 text-white/60">

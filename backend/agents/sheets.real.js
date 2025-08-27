@@ -1,81 +1,63 @@
 // backend/agents/sheets.real.js
 import { google } from "googleapis";
 import { getIntegration, setIntegration } from "../lib/db.js";
+import { asGoogleClient } from "../lib/googleAuth.js";
 
-function buildOAuthClient() {
-  const oAuth = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI // e.g. http://localhost:3001/oauth/google/callback
-  );
-  return oAuth;
-}
-
-async function asGoogleClient(uid) {
-  const oauth = buildOAuthClient();
-  const g = await getIntegration(uid, "google");
-  if (!g?.access_token) throw new Error("Google account not connected");
-
-  oauth.setCredentials({
-    access_token: g.access_token,
-    refresh_token: g.refresh_token,
-    expiry_date: g.expiry_date || 0,
-  });
-
-  // auto-refresh handling
-  oauth.on("tokens", async (tokens) => {
-    if (tokens.refresh_token || tokens.access_token) {
-      await setIntegration(uid, "google", {
-        access_token: tokens.access_token ?? g.access_token,
-        refresh_token: tokens.refresh_token ?? g.refresh_token,
-        expiry_date: Date.now() + (tokens.expires_in || 0) * 1000,
-      });
-    }
-  });
-
-  return oauth;
+function normalizeRange(range) {
+  // Accept "Sheet1", "Sheet1!A1", or full ranges; default to "Sheet1!A1"
+  if (!range || typeof range !== "string" || !range.trim()) return "Sheet1!A1";
+  const r = range.trim();
+  return r.includes("!") ? r : `${r}!A1`;
 }
 
 export async function sheetsRealAgent(ctx) {
   const { uid, instruction, memory } = ctx;
+
+  // Prefer summarizer output, fallback to instruction
   const summary = memory?.lastSummary || instruction || "(no summary)";
   const timestamp = new Date().toISOString();
 
+  // OAuth client with shared refresh/persist logic
   const auth = await asGoogleClient(uid);
   const sheets = google.sheets({ version: "v4", auth });
 
-  // read defaults (spreadsheetId, range) from integrations/sheets
+  // Read user sheet config
   const cfg = await getIntegration(uid, "sheets");
-  const spreadsheetId = cfg?.spreadsheetId;
-  let range = cfg?.defaultRange || "Sheet1!A1";
+  let spreadsheetId = cfg?.spreadsheetId || null;
+  let range = normalizeRange(cfg?.defaultRange || "Sheet1!A1");
 
+  // If no spreadsheet configured, create a lightweight one and save to integrations
   if (!spreadsheetId) {
-    // Optional: create a new spreadsheet if none exists
     const createResp = await sheets.spreadsheets.create({
       requestBody: {
         properties: { title: "Octopus Outputs" },
-        sheets: [{ properties: { title: "Sheet1" } }],
+        sheets: [{ properties: { title: range.split("!")[0] || "Sheet1" } }],
       },
     });
-    const id = createResp.data.spreadsheetId;
-    await setIntegration(uid, "sheets", { spreadsheetId: id, defaultRange: "Sheet1!A1" });
-    range = "Sheet1!A1";
+
+    spreadsheetId = createResp?.data?.spreadsheetId;
+    if (!spreadsheetId) throw new Error("Failed to create Google Sheet");
+
+    // Persist spreadsheetId + keep any existing defaults
+    await setIntegration(uid, "sheets", {
+      spreadsheetId,
+      defaultRange: range,
+      ...(cfg || {}),
+    });
   }
 
-  const targetSpreadsheetId = spreadsheetId || (await getIntegration(uid, "sheets")).spreadsheetId;
-
-  // Append a row
+  // Append a row: [timestamp, summary]
   await sheets.spreadsheets.values.append({
-    spreadsheetId: targetSpreadsheetId,
+    spreadsheetId,
     range,
     valueInputOption: "RAW",
     requestBody: { values: [[timestamp, summary]] },
   });
 
-  const url = `https://docs.google.com/spreadsheets/d/${targetSpreadsheetId}/edit`;
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
   return {
     link: url,
-    payload: { ok: true, spreadsheetId: targetSpreadsheetId, range },
+    payload: { ok: true, spreadsheetId, range },
     memoryPatch: { lastSheetUrl: url },
   };
 }
