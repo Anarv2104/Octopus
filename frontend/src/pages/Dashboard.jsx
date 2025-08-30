@@ -32,13 +32,13 @@ export default function Dashboard() {
   const [fileMeta, setFileMeta] = useState(null);
   const [uploading, setUploading] = useState(false);
 
-  // summary modal
+  // summary/error modal
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [summaryText, setSummaryText] = useState("");
 
   // integrations
   const [googleConnected, setGoogleConnected] = useState(false);
-  const [googleEmail, setGoogleEmail] = useState(null); // <-- NEW
+  const [googleEmail, setGoogleEmail] = useState(null);
   const [checkingIntegrations, setCheckingIntegrations] = useState(false);
 
   // ui helpers
@@ -88,7 +88,7 @@ export default function Dashboard() {
       setCheckingIntegrations(true);
       const data = await getIntegrations(idToken);
       setGoogleConnected(!!data?.google?.connected);
-      setGoogleEmail(data?.google?.email || null); // <-- NEW
+      setGoogleEmail(data?.google?.email || null);
     } catch {
       // ignore
     } finally {
@@ -112,7 +112,7 @@ export default function Dashboard() {
         setErr("Please sign in again to connect Google.");
         return;
       }
-      setCheckingIntegrations(true); // instant feedback
+      setCheckingIntegrations(true);
 
       // Force a fresh Firebase ID token so backend never sees an expired one.
       const freshIdToken = await user.getIdToken(true);
@@ -377,7 +377,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Summary modal */}
+      {/* Summary/Error modal */}
       {summaryOpen && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
           <div className="w-full max-w-2xl rounded-2xl border border-white/10 bg-[#111111]">
@@ -410,6 +410,7 @@ export default function Dashboard() {
 }
 
 /* ---------- UI bits ---------- */
+
 function PendingBadge() {
   return (
     <span className="inline-flex items-center gap-2 text-white/80">
@@ -421,6 +422,7 @@ function PendingBadge() {
     </span>
   );
 }
+
 function SpinnerDots() {
   return (
     <span className="inline-flex items-center gap-1.5 text-white/60">
@@ -436,6 +438,7 @@ function StepRow({ step, onShowSummary }) {
   const isFail = step.status === "failed";
   const isPending = !isDone && !isFail;
   const hasSummary = !!step?.payload?.summary;
+  const hasError = !!step?.error;
 
   return (
     <div className="flex items-center justify-between rounded-2xl bg-[#141414] border border-white/5 px-5 py-4">
@@ -457,6 +460,15 @@ function StepRow({ step, onShowSummary }) {
             className="text-sm rounded-md border border-white/10 px-3 py-1 hover:bg-white/5"
           >
             View summary
+          </button>
+        )}
+
+        {isFail && hasError && (
+          <button
+            onClick={() => onShowSummary(step.error)}
+            className="text-sm rounded-md border border-white/10 px-3 py-1 hover:bg-white/5 text-rose-300"
+          >
+            View error
           </button>
         )}
 

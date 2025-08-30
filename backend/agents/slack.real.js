@@ -1,36 +1,79 @@
-import { WebClient } from "@slack/web-api";
+// backend/agents/slack.real.js
+import fetch from "node-fetch";
 
+/**
+ * Posts a message to SLACK_CHANNEL_ID using SLACK_BOT_TOKEN.
+ * Improvements:
+ *  - If error is "not_in_channel", attempts to join public channels.
+ *  - Surfaces Slack API error text so the dashboard shows why it failed.
+ */
 export async function slackRealAgent(ctx) {
-  const token   = process.env.SLACK_BOT_TOKEN;
-  const channel = process.env.SLACK_CHANNEL_ID;
-  if (!token || !channel) {
-    return { link: "#", payload: { ok: false, note: "Slack env not set" } };
+  const { SLACK_BOT_TOKEN, SLACK_CHANNEL_ID, SLACK_WORKSPACE_ID } = process.env;
+  if (!SLACK_BOT_TOKEN || !SLACK_CHANNEL_ID) {
+    throw new Error("Slack env missing (SLACK_BOT_TOKEN / SLACK_CHANNEL_ID).");
   }
 
-  const slack = new WebClient(token);
+  const { instruction, memory } = ctx;
+  const summary = memory?.lastSummary || instruction || "(no summary)";
+  const fileUrl = memory?.fileUrl;
 
-  const body =
-    ctx?.memory?.lastSummary ||
-    ctx?.payload?.summary ||
-    `Octopus update: ${ctx?.instruction || "(no instruction)"}`;
+  const lines = [];
+  lines.push(`*Octopus Update*`);
+  if (instruction) lines.push(`*Instruction:* ${instruction}`);
+  if (summary)    lines.push(`*Summary:* ${summary}`);
+  if (fileUrl)    lines.push(`<${fileUrl}|Source File>`);
+  const text = lines.join("\n");
 
-  const post = await slack.chat.postMessage({
-    channel,
-    text: body.slice(0, 3500),
-  });
+  async function post() {
+    const resp = await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({ channel: SLACK_CHANNEL_ID, text, mrkdwn: true }),
+    });
+    return resp.json();
+  }
 
-  const ch = post?.channel;
-  const ts = post?.ts;
+  let data = await post();
 
-  let permalink = "#";
-  try {
-    const pl = await slack.chat.getPermalink({ channel: ch, message_ts: ts });
-    permalink = pl?.permalink || "#";
-  } catch {}
+  // If bot not in channel, try to join (public channels only)
+  if (!data.ok && data.error === "not_in_channel") {
+    try {
+      const joinResp = await fetch("https://slack.com/api/conversations.join", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        body: JSON.stringify({ channel: SLACK_CHANNEL_ID }),
+      });
+      const join = await joinResp.json();
+      if (join.ok) {
+        data = await post(); // retry
+      }
+    } catch {
+      // ignore join errors; we'll fall through to error surface below
+    }
+  }
+
+  if (!data.ok) {
+    throw new Error(`Slack post failed: ${data.error || "unknown_error"}`);
+  }
+
+  // Build deep link if we can
+  let link = "#";
+  if (data.ts) {
+    const tsId = String(data.ts).replace(".", "");
+    link = SLACK_WORKSPACE_ID
+      ? `https://app.slack.com/client/${SLACK_WORKSPACE_ID}/${SLACK_CHANNEL_ID}/p${tsId}`
+      : `https://slack.com/app_redirect?channel=${SLACK_CHANNEL_ID}`;
+  }
 
   return {
-    link: permalink,
-    payload: { ok: true, channel: ch, ts },
-    memoryPatch: { lastSlackTs: ts, lastSlackChannel: ch, lastSlackPermalink: permalink },
+    link,
+    payload: { ok: true, ts: data.ts, channel: data.channel },
+    memoryPatch: { lastSlackTs: data.ts },
   };
 }

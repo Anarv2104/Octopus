@@ -10,7 +10,7 @@ export async function executeRun(app, runId) {
   if (!run) throw new Error("run not found");
   run.status = "running";
 
-  // --- NEW: make sure summarizer (if present) always runs first
+  // Run summarizer first if present
   if (Array.isArray(run.steps) && run.steps.length > 1) {
     run.steps.sort((a, b) => {
       const aSumm = a.tool === "summarizer";
@@ -20,6 +20,8 @@ export async function executeRun(app, runId) {
       return 0;
     });
   }
+
+  let anyFailed = false;
 
   for (const step of run.steps) {
     step.status = "running";
@@ -56,6 +58,7 @@ export async function executeRun(app, runId) {
     } catch (e) {
       step.status = "failed";
       step.error = String(e?.message || e);
+      anyFailed = true;
 
       publish(runId, msg({
         runId,
@@ -64,12 +67,10 @@ export async function executeRun(app, runId) {
         payload: { ok: false, error: step.error },
       }));
 
-      run.status = "failed";
-      run.completedAt = Date.now();
-      return;
+      // DO NOT return; continue to next step (best-effort)
     }
   }
 
-  run.status = "completed";
+  run.status = anyFailed ? "completed_with_errors" : "completed";
   run.completedAt = Date.now();
 }

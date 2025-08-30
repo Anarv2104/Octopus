@@ -11,6 +11,8 @@ const useNotion = () => !!process.env.NOTION_TOKEN && !!process.env.NOTION_DB_ID
 const useSlack  = () => !!process.env.SLACK_BOT_TOKEN && !!process.env.SLACK_CHANNEL_ID;
 const useSheets = hasGoogleOAuth;   // Sheets via Google OAuth
 const useEmail  = hasGoogleOAuth;   // Gmail via Google OAuth
+
+// If/when you add GitHub OAuth/PAT, turn this on accordingly
 const useGithub = () =>
   !!process.env.GITHUB_TOKEN && !!process.env.GITHUB_OWNER && !!process.env.GITHUB_REPO;
 
