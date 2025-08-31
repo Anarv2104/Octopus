@@ -11,6 +11,7 @@ import { google } from "googleapis";
 import { initBus } from "./lib/agentBus.js";
 import { executeRun } from "./orchestrator/supervisor.js";
 import { router as googleOAuthRouter } from "./oauth/google.js";
+import { router as githubOAuthRouter } from "./oauth/github.js";
 import { getIntegration, deleteIntegration } from "./lib/db.js";
 
 const app = express();
@@ -47,6 +48,7 @@ if (!admin.apps.length) {
 
 /* ---------- OAuth routes ---------- */
 app.use("/oauth/google", googleOAuthRouter);
+app.use("/oauth/github", githubOAuthRouter);
 
 /* ---------- Auth middleware ---------- */
 async function requireAuth(req, res, next) {
@@ -73,11 +75,24 @@ app.get("/integrations", requireAuth, async (req, res) => {
   try {
     const uid = req.user.uid;
     const g = await getIntegration(uid, "google");
+    const gh = await getIntegration(uid, "github");
     res.json({
       google: {
         connected: !!(g && (g.access_token || g.refresh_token)),
         email: g?.email || null,
         updatedAt: g?.updatedAt || null,
+      },
+      // single-tenant flags to show “Available” on UI
+      notion: {
+        available: !!(process.env.NOTION_TOKEN && process.env.NOTION_DB_ID),
+      },
+      slack: {
+        available: !!(process.env.SLACK_BOT_TOKEN && process.env.SLACK_CHANNEL_ID),
+      },
+      github: {
+        connected: !!gh?.access_token,
+        login: gh?.login || null,
+        updatedAt: gh?.updatedAt || null,
       },
     });
   } catch (e) {
@@ -85,7 +100,7 @@ app.get("/integrations", requireAuth, async (req, res) => {
   }
 });
 
-/* ---------- Disconnect Google (revokes + clears) ---------- */
+/* ---------- Disconnect Google ---------- */
 app.post("/integrations/google/disconnect", requireAuth, async (req, res) => {
   try {
     const uid = req.user.uid;
@@ -98,7 +113,7 @@ app.post("/integrations/google/disconnect", requireAuth, async (req, res) => {
       );
       const token = g.refresh_token || g.access_token;
       if (token) {
-        try { await oauth.revokeToken(token); } catch { /* ignore network errors */ }
+        try { await oauth.revokeToken(token); } catch {}
       }
     }
     await deleteIntegration(uid, "google");
@@ -121,7 +136,7 @@ app.post("/upload", requireAuth, upload.single("file"), (req, res) => {
   });
 });
 
-/* ---------- Runs API (in-memory) ---------- */
+/* ---------- Runs API ---------- */
 app.post("/runs", requireAuth, (req, res) => {
   const { instruction, tools, fileId } = req.body || {};
   if (!instruction || !Array.isArray(tools) || tools.length === 0) {

@@ -1,7 +1,7 @@
 // backend/agents/index.js
 import { summarizerAgent } from "./summarizer.js";
 
-/** Feature flags: only try real agents when creds exist */
+/** Feature flags */
 const hasGoogleOAuth = () =>
   !!process.env.GOOGLE_CLIENT_ID &&
   !!process.env.GOOGLE_CLIENT_SECRET &&
@@ -9,14 +9,20 @@ const hasGoogleOAuth = () =>
 
 const useNotion = () => !!process.env.NOTION_TOKEN && !!process.env.NOTION_DB_ID;
 const useSlack  = () => !!process.env.SLACK_BOT_TOKEN && !!process.env.SLACK_CHANNEL_ID;
-const useSheets = hasGoogleOAuth;   // Sheets via Google OAuth
-const useEmail  = hasGoogleOAuth;   // Gmail via Google OAuth
+const useSheets = hasGoogleOAuth;   // callable predicate
+const useEmail  = hasGoogleOAuth;   // callable predicate
 
-// If/when you add GitHub OAuth/PAT, turn this on accordingly
-const useGithub = () =>
+// GitHub multi-tenant via OAuth
+const useGithubOAuth = () =>
+  !!process.env.GITHUB_CLIENT_ID &&
+  !!process.env.GITHUB_CLIENT_SECRET &&
+  !!process.env.GITHUB_REDIRECT_URI;
+
+// Keep PAT fallback (if you ever need it again)
+const useGithubPAT = () =>
   !!process.env.GITHUB_TOKEN && !!process.env.GITHUB_OWNER && !!process.env.GITHUB_REPO;
 
-/** Stubs so the app runs even without creds */
+/** Stubs */
 const stubs = {
   notion: async () => ({ link: "#", payload: { ok: true, stub: "notion" },  memoryPatch: {} }),
   slack:  async () => ({ link: "#", payload: { ok: true, stub: "slack" },   memoryPatch: {} }),
@@ -25,7 +31,6 @@ const stubs = {
   email:  async () => ({ link: "#", payload: { ok: true, stub: "email" },   memoryPatch: {} }),
 };
 
-/** Lazy load reals so missing files don’t crash dev */
 async function loadReal(tool) {
   try {
     switch (tool) {
@@ -37,11 +42,10 @@ async function loadReal(tool) {
       default:       return null;
     }
   } catch {
-    return null; // fall back to stub
+    return null; // fall back to stub if real agent file missing or throws
   }
 }
 
-/** Single entry point */
 export async function runAgent(tool, ctx) {
   if (tool === "summarizer") return summarizerAgent(ctx);
 
@@ -54,7 +58,7 @@ export async function runAgent(tool, ctx) {
   if (tool === "sheets" && useSheets()) {
     const real = await loadReal("sheets"); if (real) return real(ctx);
   }
-  if (tool === "github" && useGithub()) {
+  if (tool === "github" && (useGithubOAuth() || useGithubPAT())) {
     const real = await loadReal("github"); if (real) return real(ctx);
   }
   if (tool === "email" && useEmail()) {

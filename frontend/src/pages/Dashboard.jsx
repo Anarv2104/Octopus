@@ -2,7 +2,20 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import PropTypes from "prop-types";
 import { getAuth } from "firebase/auth";
-import { Paperclip, X, Loader2, Link as LinkIcon, CheckCircle2, ArrowRight } from "lucide-react";
+import {
+  Paperclip,
+  X,
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
+  Link as LinkIcon,
+  Github,
+  Mail,
+  FileSpreadsheet,
+  FileText,
+  Blocks,
+} from "lucide-react";
+
 import { useAuth } from "../context/AuthContext";
 import { planTools } from "../lib/planner";
 import {
@@ -13,7 +26,23 @@ import {
   API,
   getIntegrations,
   disconnectGoogle,
+  disconnectGitHub,
 } from "../lib/api";
+
+/* ---------- small helpers ---------- */
+const buildGoogleStartUrl = async () => {
+  const auth = getAuth();
+  const user = auth.currentUser;
+  const fresh = await user.getIdToken(true);
+  return `${API}/oauth/google/start?idToken=${encodeURIComponent(fresh)}`;
+};
+
+const buildGitHubStartUrl = async () => {
+  const auth = getAuth();
+  const user = auth.currentUser;
+  const fresh = await user.getIdToken(true);
+  return `${API}/oauth/github/start?idToken=${encodeURIComponent(fresh)}`;
+};
 
 export default function Dashboard() {
   const { idToken } = useAuth();
@@ -39,6 +68,14 @@ export default function Dashboard() {
   // integrations
   const [googleConnected, setGoogleConnected] = useState(false);
   const [googleEmail, setGoogleEmail] = useState(null);
+
+  const [githubConnected, setGithubConnected] = useState(false);
+  const [githubLogin, setGithubLogin] = useState(null);
+
+  // single-tenant availability (env presence on backend)
+  const [notionAvailable, setNotionAvailable] = useState(false);
+  const [slackAvailable, setSlackAvailable] = useState(false);
+
   const [checkingIntegrations, setCheckingIntegrations] = useState(false);
 
   // ui helpers
@@ -87,8 +124,18 @@ export default function Dashboard() {
     try {
       setCheckingIntegrations(true);
       const data = await getIntegrations(idToken);
+
+      // Google
       setGoogleConnected(!!data?.google?.connected);
       setGoogleEmail(data?.google?.email || null);
+
+      // GitHub (per-user)
+      setGithubConnected(!!data?.github?.connected);
+      setGithubLogin(data?.github?.login || null);
+
+      // Single-tenant availability flags
+      setNotionAvailable(!!data?.notion?.available);
+      setSlackAvailable(!!data?.slack?.available);
     } catch {
       // ignore
     } finally {
@@ -103,30 +150,24 @@ export default function Dashboard() {
     return () => window.removeEventListener("focus", onFocus);
   }, [refreshIntegrations]);
 
-  /* ---------- Integrations: Google (with fresh Firebase ID token) ---------- */
+  /* ---------- Integrations: Google ---------- */
   const connectGoogle = async () => {
     try {
       const auth = getAuth();
-      const user = auth.currentUser;
-      if (!user) {
+      if (!auth.currentUser) {
         setErr("Please sign in again to connect Google.");
         return;
       }
       setCheckingIntegrations(true);
-
-      // Force a fresh Firebase ID token so backend never sees an expired one.
-      const freshIdToken = await user.getIdToken(true);
-      const url = `${API}/oauth/google/start?idToken=${encodeURIComponent(freshIdToken)}`;
+      const url = await buildGoogleStartUrl();
       window.open(url, "_blank", "noopener,noreferrer");
-      // Status re-checks on focus (above)
     } catch (e) {
       setErr("Failed to start Google connection: " + (e?.message || "unknown error"));
       setCheckingIntegrations(false);
     }
   };
 
-  /* ---------- Disconnect Google ---------- */
-  const disconnect = async () => {
+  const disconnectGoogleClick = async () => {
     try {
       setErr("");
       setCheckingIntegrations(true);
@@ -135,6 +176,37 @@ export default function Dashboard() {
       setGoogleEmail(null);
     } catch (e) {
       setErr(e?.message || "Failed to disconnect Google");
+    } finally {
+      setCheckingIntegrations(false);
+    }
+  };
+
+  /* ---------- Integrations: GitHub ---------- */
+  const connectGitHub = async () => {
+    try {
+      const auth = getAuth();
+      if (!auth.currentUser) {
+        setErr("Please sign in again to connect GitHub.");
+        return;
+      }
+      setCheckingIntegrations(true);
+      const url = await buildGitHubStartUrl();
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      setErr("Failed to start GitHub connection: " + (e?.message || "unknown error"));
+      setCheckingIntegrations(false);
+    }
+  };
+
+  const disconnectGitHubClick = async () => {
+    try {
+      setErr("");
+      setCheckingIntegrations(true);
+      await disconnectGitHub(idToken);
+      setGithubConnected(false);
+      setGithubLogin(null);
+    } catch (e) {
+      setErr(e?.message || "Failed to disconnect GitHub");
     } finally {
       setCheckingIntegrations(false);
     }
@@ -289,59 +361,67 @@ export default function Dashboard() {
           <p>e.g. Create tasks in GitHub from roadmap, share update to Slack</p>
         </div>
 
-        {/* integrations block – on-brand card */}
+        {/* integrations block – refreshed UI */}
         <div className="mt-6">
-          <div className="rounded-2xl border border-white/10 bg-[#0f0f0f] p-4 md:p-5 shadow-[0_0_50px_rgba(255,90,0,0.06)]">
-            <div className="flex flex-col md:flex-row md:items-center gap-4">
-              {/* Left: title */}
-              <div className="flex items-center gap-2">
-                <span className="text-sm uppercase tracking-wider text-white/50">Integrations</span>
-              </div>
+          <div className="rounded-2xl border border-white/10 bg-[#0f0f0f]/90 p-5 shadow-[0_0_50px_rgba(255,90,0,0.06)]">
+            <div className="mb-3 flex items-center gap-2">
+              <Blocks className="h-4 w-4 text-white/60" />
+              <span className="text-sm uppercase tracking-wider text-white/60">Integrations</span>
+            </div>
 
-              {/* Middle: Google chip */}
-              <div className="flex items-center gap-3 md:ml-2">
-                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/40 px-3 py-1.5">
-                  {googleConnected ? (
-                    <>
-                      <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                      <span className="text-sm text-white/80">
-                        Google Connected{googleEmail ? ` — ${googleEmail}` : ""}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={disconnect}
-                        disabled={checkingIntegrations}
-                        className="text-xs rounded-md border border-rose-500/40 text-rose-300 px-2.5 py-1 hover:bg-rose-500/10"
-                        title="Disconnect Google"
-                      >
-                        {checkingIntegrations ? "Working…" : "Disconnect"}
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-sm text-white/80">Google (Sheets & Gmail)</span>
-                      <button
-                        type="button"
-                        onClick={connectGoogle}
-                        disabled={checkingIntegrations}
-                        className="text-xs rounded-md border border-white/10 px-2.5 py-1 hover:bg-white/5"
-                        title="Connect Google Sheets & Gmail"
-                      >
-                        {checkingIntegrations ? "Checking…" : "Connect"}
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Google */}
+              <IntegrationCard
+                icon={<Mail className="h-4 w-4" />}
+                title="Google"
+                subtitle={googleConnected ? (googleEmail || "Connected") : "Sheets & Gmail"}
+                ok={googleConnected}
+                primaryLabel={googleConnected ? "Disconnect" : "Connect"}
+                onPrimary={googleConnected ? disconnectGoogleClick : connectGoogle}
+                busy={checkingIntegrations}
+              />
 
-              {/* Right: helper hint */}
-              <div className="md:ml-auto flex items-center gap-2 text-[12px] text-white/40">
-                <LinkIcon className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">
-                  Try <em>“Email this summary to me”</em> or <em>“Append summary to Google Sheet”</em>.
-                </span>
-                <ArrowRight className="h-3.5 w-3.5 hidden sm:block" />
-              </div>
+              {/* GitHub */}
+              <IntegrationCard
+                icon={<Github className="h-4 w-4" />}
+                title="GitHub"
+                subtitle={githubConnected ? (githubLogin || "Connected") : "Issues API"}
+                ok={githubConnected}
+                primaryLabel={githubConnected ? "Disconnect" : "Connect"}
+                onPrimary={githubConnected ? disconnectGitHubClick : connectGitHub}
+                busy={checkingIntegrations}
+              />
+
+              {/* Notion (env presence only) */}
+              <IntegrationCard
+                icon={<FileText className="h-4 w-4" />}
+                title="Notion"
+                subtitle={notionAvailable ? "Available" : "Not configured"}
+                ok={notionAvailable}
+                primaryLabel={notionAvailable ? "Ready" : "Missing"}
+                onPrimary={null}
+                busy={false}
+                passive
+              />
+
+              {/* Slack (env presence only) */}
+              <IntegrationCard
+                icon={<FileSpreadsheet className="h-4 w-4" />}
+                title="Slack"
+                subtitle={slackAvailable ? "Available" : "Not configured"}
+                ok={slackAvailable}
+                primaryLabel={slackAvailable ? "Ready" : "Missing"}
+                onPrimary={null}
+                busy={false}
+                passive
+              />
+            </div>
+
+            <div className="mt-4 flex items-center gap-2 text-[12px] text-white/40">
+              <LinkIcon className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">
+                Try <em>“Email this summary to me”</em> or <em>“Append summary to Google Sheet”</em>.
+              </span>
             </div>
           </div>
         </div>
@@ -355,7 +435,12 @@ export default function Dashboard() {
         )}
 
         {/* errors */}
-        {err && <p className="mt-4 text-[#ff6440]">{err}</p>}
+        {err && (
+          <p className="mt-4 text-rose-400 flex items-center gap-2">
+            <AlertCircle className="h-4 w-4" />
+            {err}
+          </p>
+        )}
       </div>
 
       {/* timeline */}
@@ -410,6 +495,78 @@ export default function Dashboard() {
 }
 
 /* ---------- UI bits ---------- */
+
+function IntegrationCard({
+  icon,
+  title,
+  subtitle,
+  ok,
+  primaryLabel,
+  onPrimary,
+  busy,
+  passive = false,
+}) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-[#0c0c0c] p-4 flex items-center gap-3">
+      <div
+        className={`grid place-items-center h-9 w-9 rounded-lg ${
+          ok ? "bg-emerald-500/15 text-emerald-300" : "bg-white/10 text-white/60"
+        }`}
+      >
+        {icon}
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-white/90 font-medium">{title}</span>
+          {ok ? (
+            <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+          ) : (
+            <AlertCircle className="h-4 w-4 text-white/40" />
+          )}
+        </div>
+        <p className="text-xs text-white/50 truncate">{subtitle}</p>
+      </div>
+
+      <div>
+        {passive ? (
+          <span
+            className={`text-xs rounded-md px-2.5 py-1 border ${
+              ok
+                ? "border-emerald-500/30 text-emerald-300"
+                : "border-white/10 text-white/50"
+            }`}
+          >
+            {primaryLabel}
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={onPrimary || (() => {})}
+            disabled={busy}
+            className={`text-xs rounded-md px-2.5 py-1 border hover:bg-white/5 ${
+              ok
+                ? "border-rose-500/40 text-rose-300"
+                : "border-white/10 text-white/80"
+            } ${busy ? "opacity-50 cursor-not-allowed" : ""}`}
+          >
+            {busy ? "Working…" : primaryLabel}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+IntegrationCard.propTypes = {
+  icon: PropTypes.node,
+  title: PropTypes.string,
+  subtitle: PropTypes.string,
+  ok: PropTypes.bool,
+  primaryLabel: PropTypes.string,
+  onPrimary: PropTypes.any,
+  busy: PropTypes.bool,
+  passive: PropTypes.bool,
+};
 
 function PendingBadge() {
   return (
