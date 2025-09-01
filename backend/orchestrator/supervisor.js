@@ -3,15 +3,14 @@ import { publish } from "../lib/agentBus.js";
 import { TYPES, msg } from "../lib/messages.js";
 import { runAgent } from "../agents/index.js";
 import { patchMemory } from "../lib/memory.js";
+import { saveRunMeta, saveStep, appendLog, finalizeRun } from "../lib/history.js";
 
-/** tiny sleep helper */
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** keep summarizer first if present; leave other order intact */
 function summarizerFirst(steps = []) {
   if (!Array.isArray(steps) || steps.length < 2) return steps || [];
   const i = steps.findIndex((s) => s.tool === "summarizer");
-  if (i <= 0) return steps; // either not found or already first
+  if (i <= 0) return steps;
   const copy = steps.slice();
   const [summ] = copy.splice(i, 1);
   copy.unshift(summ);
@@ -23,7 +22,6 @@ export async function executeRun(app, runId) {
   const run = store[runId];
   if (!run) throw new Error("run not found");
 
-  // config knobs (env, optional)
   const maxAttempts = Math.max(1, parseInt(process.env.STEP_MAX_ATTEMPTS || "2", 10));
   const baseBackoff = Math.max(0, parseInt(process.env.STEP_BACKOFF_MS || "600", 10));
   const continueOnError = String(process.env.CONTINUE_ON_ERROR || "true") !== "false";
@@ -31,35 +29,38 @@ export async function executeRun(app, runId) {
   run.status = "running";
   run.log ||= [];
   run.memory ||= {};
-
-  // preserve your intended behavior: summarizer goes first
   if (Array.isArray(run.steps)) run.steps = summarizerFirst(run.steps);
+
+  await saveRunMeta(run);
 
   let anyFailed = false;
 
   for (const step of run.steps) {
-    // if step already done (in case of re-run), skip
     if (step.status === "done") continue;
 
     step.status = "running";
     step.error = null;
 
-    // one ACTION_REQUEST per step (same as your previous behavior)
-    publish(
+    // NEW: freeze createdAt once for this step
+    step.createdAt ||= Date.now();
+    await saveStep(run.id, step);
+
+    publish(runId, msg({
       runId,
-      msg({
-        runId,
-        from: "supervisor",
-        type: TYPES.ACTION_REQUEST,
-        payload: { tool: step.tool },
-      })
-    );
+      from: "supervisor",
+      type: TYPES.ACTION_REQUEST,
+      payload: { tool: step.tool },
+    }));
 
-    let attempt = 0;
-    let succeeded = false;
-    let lastErr = null;
+    // NEW: log ACTION_REQUEST
+    await appendLog(run.id, {
+      from: "supervisor",
+      type: "ACTION_REQUEST",
+      payload: { tool: step.tool },
+    });
 
-    // retry loop
+    let attempt = 0, succeeded = false, lastErr = null;
+
     while (attempt < maxAttempts && !succeeded) {
       try {
         const result = await runAgent(step.tool, {
@@ -68,90 +69,77 @@ export async function executeRun(app, runId) {
           memory: run.memory || {},
         });
 
-        // memory handoff (your existing helper)
-        if (result?.memoryPatch) {
-          patchMemory(app, runId, result.memoryPatch);
-        }
+        if (result?.memoryPatch) patchMemory(app, runId, result.memoryPatch);
 
-        // finalize step on success
         step.link = result?.link || step.link || "#";
         step.payload = result?.payload || null;
         step.error = null;
         step.status = "done";
 
-        // your previous special case: if summarizer & we had a file, show file link
-        if (step.tool === "summarizer" && run.fileUrl) {
-          step.link = run.fileUrl;
-        }
+        if (step.tool === "summarizer" && run.fileUrl) step.link = run.fileUrl;
 
-        // ACTION_RESULT (ok: true)
-        publish(
+        await saveStep(run.id, step);
+
+        publish(runId, msg({
           runId,
-          msg({
-            runId,
-            from: step.tool,
-            type: TYPES.ACTION_RESULT,
-            payload: { ok: true, link: step.link },
-          })
-        );
+          from: step.tool,
+          type: TYPES.ACTION_RESULT,
+          payload: { ok: true, link: step.link },
+        }));
+
+        // NEW: log successful ACTION_RESULT
+        await appendLog(run.id, {
+          from: step.tool,
+          type: "ACTION_RESULT",
+          payload: { ok: true, link: step.link },
+        });
 
         succeeded = true;
       } catch (e) {
         lastErr = e;
         attempt += 1;
 
-        // if we still have attempts left, wait with exponential backoff then retry
+        await appendLog(run.id, {
+          from: step.tool,
+          type: "retry",
+          payload: { attempt, message: String(e?.message || e) },
+        });
+
         if (attempt < maxAttempts) {
           const backoff = baseBackoff * Math.pow(2, attempt - 1);
-          run.log.push({
-            ts: Date.now(),
-            level: "warn",
-            tool: step.tool,
-            attempt,
-            msg: `retrying in ${backoff}ms due to: ${e?.message || e}`,
-          });
+          run.log.push({ ts: Date.now(), level: "warn", tool: step.tool, attempt, msg: `retrying in ${backoff}ms due to: ${e?.message || e}` });
           await wait(backoff);
         }
       }
     }
 
-    // After retries, if not succeeded, mark failed
     if (!succeeded) {
       step.status = "failed";
       step.error = String(lastErr?.message || lastErr || "Unknown error");
       anyFailed = true;
+      await saveStep(run.id, step);
 
-      // ACTION_RESULT (ok: false)
-      publish(
+      publish(runId, msg({
         runId,
-        msg({
-          runId,
-          from: step.tool,
-          type: TYPES.ACTION_RESULT,
-          payload: { ok: false, error: step.error },
-        })
-      );
+        from: step.tool,
+        type: TYPES.ACTION_RESULT,
+        payload: { ok: false, error: step.error },
+      }));
 
-      // log failure
-      run.log.push({
-        ts: Date.now(),
-        level: "error",
-        tool: step.tool,
-        msg: step.error,
-      });
+      await appendLog(run.id, { from: step.tool, type: "error", payload: { message: step.error } });
 
-      // optionally stop the whole pipeline
       if (!continueOnError) {
         run.status = "failed";
         run.completedAt = Date.now();
+        await finalizeRun(run);
         return;
       }
-
-      // else continue to next step
     }
+
+    await saveRunMeta(run);
   }
 
-  // overall status (mirror your previous semantics)
   run.status = anyFailed ? "completed_with_errors" : "completed";
   run.completedAt = Date.now();
+  await finalizeRun(run);
 }

@@ -1,6 +1,7 @@
 // frontend/src/pages/Dashboard.jsx
 import { useState, useEffect, useRef, useCallback } from "react";
 import PropTypes from "prop-types";
+import { Link } from "react-router-dom";
 import { getAuth } from "firebase/auth";
 import {
   Paperclip,
@@ -14,6 +15,7 @@ import {
   FileSpreadsheet,
   FileText,
   Blocks,
+  History as HistoryIcon,
 } from "lucide-react";
 
 import { useAuth } from "../context/AuthContext";
@@ -274,6 +276,18 @@ export default function Dashboard() {
 
   return (
     <section className="relative">
+      {/* floating History button under navbar, right side */}
+      <div className="fixed right-5 top-20 z-30">
+        <Link
+          to="/history"
+          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-[#121212] px-3 py-1.5 text-sm hover:bg-white/5"
+          title="View run history"
+        >
+          <HistoryIcon className="h-4 w-4" />
+          History
+        </Link>
+      </div>
+
       {/* hero */}
       <div className="max-w-6xl mx-auto px-6 py-16 md:py-24 min-h-[68vh] flex flex-col justify-center">
         <h1 className="leading-tight font-semibold tracking-[-0.02em] mb-10 md:mb-12">

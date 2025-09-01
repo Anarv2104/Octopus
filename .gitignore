@@ -1,2 +1,7 @@
 backend/data/
 backend/data/
+
+# Env & secrets
+.env
+.env.*
+!.env.example

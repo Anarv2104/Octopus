@@ -22,3 +22,4 @@ build/
 .cache/
 
 uploads/
+service-account.json

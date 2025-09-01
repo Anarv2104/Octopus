@@ -21,6 +21,9 @@ import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Dashboard from "./pages/Dashboard";
 
+// 🔥 NEW page
+import History from "./pages/History";
+
 // -------- Small helpers --------
 
 // Scroll to top on route change (when there is no hash)
@@ -69,9 +72,11 @@ export default function App() {
             {/* Protected app */}
             <Route element={<ProtectedRoute />}>
               <Route path="/dashboard" element={<Dashboard />} />
+              {/* 🔥 History route */}
+              <Route path="/history" element={<History />} />
             </Route>
 
-            {/* Aliases / redirects (helpful for footer/old links) */}
+            {/* Aliases / redirects */}
             <Route path="/resources/getting-started" element={<Navigate to="/login" replace />} />
             <Route path="/resources/documentation" element={<Navigate to="/docs" replace />} />
             <Route path="/resources/community" element={<Navigate to="/#testimonials" replace />} />

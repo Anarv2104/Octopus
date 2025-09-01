@@ -77,3 +77,20 @@ export async function disconnectGitHub(idToken) {
   if (!res.ok) throw new Error(`github disconnect failed: ${res.status}`);
   return res.json();
 }
+
+// ------- History -------
+export async function getHistory(idToken) {
+  const res = await fetch(`${API}/history`, {
+    headers: { Authorization: `Bearer ${idToken}` },
+  });
+  if (!res.ok) throw new Error(`getHistory failed: ${res.status}`);
+  return res.json(); // { runs: [...] }
+}
+
+export async function getHistoryRun(idToken, id) {
+  const res = await fetch(`${API}/history/${id}`, {
+    headers: { Authorization: `Bearer ${idToken}` },
+  });
+  if (!res.ok) throw new Error(`getHistoryRun failed: ${res.status}`);
+  return res.json(); // full run { id, uid, instruction, steps:[], log:[]... }
+}
