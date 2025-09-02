@@ -332,10 +332,11 @@ export default function Dashboard() {
 
             <button
               onClick={startRun}
-              disabled={loading || uploading || !instruction.trim()}
+              disabled={loading || uploading || !instruction.trim() || tools.length === 0}
               className="rounded-full px-5 md:px-7 py-2 md:py-2.5 text-base md:text-lg
                          bg-gradient-to-r from-[#ff6a2b] to-[#ff3d0c]
                          disabled:opacity-40 disabled:cursor-not-allowed"
+              title={tools.length === 0 ? "No tools detected for this instruction" : ""}
             >
               {loading ? "Running…" : "Run"}
             </button>
@@ -442,10 +443,17 @@ export default function Dashboard() {
 
         {/* tool preview */}
         {instruction && (
-          <p className="mt-4 text-[13px] text-white/40">
-            Detected tools for this run:{" "}
-            <span className="text-white/70">{tools.join(", ")}</span>
-          </p>
+          <>
+            <p className="mt-4 text-[13px] text-white/40">
+              Detected tools for this run:{" "}
+              <span className="text-white/70">{tools.join(", ")}</span>
+            </p>
+            {tools.length === 0 && (
+              <p className="mt-1 text-[12px] text-amber-300/90">
+                No tools detected — try mentioning what to do (e.g., “create a Notion page”, “post to Slack”).
+              </p>
+            )}
+          </>
         )}
 
         {/* errors */}
@@ -613,15 +621,25 @@ function StepRow({ step, onShowSummary }) {
 
   return (
     <div className="flex items-center justify-between rounded-2xl bg-[#141414] border border-white/5 px-5 py-4">
-      <div className="flex items-center gap-3">
+      <div className="flex items-start gap-3">
         {isDone && <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />}
         {isFail && <span className="h-2.5 w-2.5 rounded-full bg-rose-500" />}
         {isPending && <PendingBadge />}
 
-        <p className="text-lg">
-          <span className="font-semibold mr-2">{isDone ? "Done" : isFail ? "Failed" : "…"}</span>
-          {labelFor(step.tool)}
-        </p>
+        <div>
+          <p className="text-lg">
+            <span className="font-semibold mr-2">{isDone ? "Done" : isFail ? "Failed" : "…"}</span>
+            {labelFor(step.tool)}
+          </p>
+          {hasError && (
+            <p
+              className="mt-1 text-rose-300 text-sm max-w-[60ch] truncate"
+              title={String(step.error)}
+            >
+              {String(step.error)}
+            </p>
+          )}
+        </div>
       </div>
 
       <div className="flex items-center gap-3">

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { getHistory } from "../lib/api";
-import { ChevronDown, ChevronRight, ExternalLink, History as HistoryIcon, ArrowLeft } from "lucide-react";
+import { ChevronDown, ChevronRight, ExternalLink, History as HistoryIcon, ArrowLeft, AlertCircle } from "lucide-react";
 
 function pill(status) {
   const map = {
@@ -53,7 +53,12 @@ export default function History() {
         </h1>
       </div>
 
-      {err && <p className="text-rose-400 mb-4">{err}</p>}
+      {err && (
+        <p className="text-rose-400 mb-4 flex items-center gap-2">
+          <AlertCircle className="h-4 w-4" />
+          {err}
+        </p>
+      )}
 
       <div className="rounded-2xl border border-white/10 overflow-hidden">
         <div className="grid grid-cols-12 gap-4 px-4 py-3 bg-[#0f0f0f] text-white/60 text-sm">
@@ -98,7 +103,15 @@ export default function History() {
                             <span className="text-white/80">{labelFor(s.tool)}</span>
                           </div>
                           <div className="flex items-center gap-3">
-                            {s.error && <span className="text-rose-300 text-sm truncate max-w-[40ch]">{s.error}</span>}
+                            {s.error && (
+                              <span
+                                title={s.error}
+                                className="text-rose-300 text-sm truncate max-w-[42ch] inline-flex items-center gap-1"
+                              >
+                                <AlertCircle className="h-3.5 w-3.5" />
+                                {s.error}
+                              </span>
+                            )}
                             {s.link && (
                               <a href={s.link} target="_blank" rel="noreferrer" className="text-emerald-300 text-sm inline-flex items-center gap-1">
                                 Open <ExternalLink className="h-3.5 w-3.5" />

@@ -113,7 +113,8 @@ export async function githubRealAgent(ctx) {
   }
 
   // 3) prepare content
-  const summary = memory?.lastSummary || instruction || "No summary provided.";
+  const summary  = memory?.lastSummary || instruction || "No summary provided.";
+  const bestLink = memory?.lastNotionUrl || memory?.fileUrl || null;
   const bullets = extractBullets(summary);
 
   const headers = {
@@ -140,7 +141,16 @@ export async function githubRealAgent(ctx) {
     throw new Error(msg);
   }
 
-  // 5) create issues
+  // 5) helper to build final issue body with References (idempotent)
+  const withReferences = (body) => {
+    if (!bestLink) return body;
+    if (body.includes(bestLink)) return body;
+    return /\n##\s*References\b/i.test(body)
+      ? `${body}\n- ${bestLink}\n`
+      : `${body}\n\n## References\n- ${bestLink}\n`;
+  };
+
+  // 6) create issues
   const createIssue = async (title, body) => {
     const r = await fetch(`${GH_API}/repos/${owner}/${repo}/issues`, {
       method: "POST",
@@ -158,12 +168,14 @@ export async function githubRealAgent(ctx) {
   if (bullets.length >= 2) {
     for (const b of bullets) {
       const t = b.slice(0, 120) || "Task";
-      const issue = await createIssue(t, summary);
+      const body = withReferences(summary);
+      const issue = await createIssue(t, body);
       created.push(issue);
     }
   } else {
     const title = (instruction || "Octopus task").slice(0, 120);
-    created.push(await createIssue(title, summary));
+    const body = withReferences(summary);
+    created.push(await createIssue(title, body));
   }
 
   const issuesUrl = `https://github.com/${owner}/${repo}/issues`;

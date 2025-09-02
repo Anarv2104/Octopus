@@ -4,6 +4,7 @@ import fetch from "node-fetch";
 /**
  * Posts a message to SLACK_CHANNEL_ID using SLACK_BOT_TOKEN.
  * Improvements:
+ *  - Prefer Notion link over file link (memory handoff).
  *  - If error is "not_in_channel", attempts to join public channels.
  *  - Surfaces Slack API error text so the dashboard shows why it failed.
  */
@@ -14,14 +15,15 @@ export async function slackRealAgent(ctx) {
   }
 
   const { instruction, memory } = ctx;
-  const summary = memory?.lastSummary || instruction || "(no summary)";
-  const fileUrl = memory?.fileUrl;
+  const summary  = memory?.lastSummary || instruction || "(no summary)";
+  // 🔶 Sprint 3 memory handoff: prefer Notion URL, fallback to file URL
+  const bestLink = memory?.lastNotionUrl || memory?.fileUrl || null;
 
   const lines = [];
   lines.push(`*Octopus Update*`);
   if (instruction) lines.push(`*Instruction:* ${instruction}`);
   if (summary)    lines.push(`*Summary:* ${summary}`);
-  if (fileUrl)    lines.push(`<${fileUrl}|Source File>`);
+  if (bestLink)   lines.push(`<${bestLink}|Link>`);
   const text = lines.join("\n");
 
   async function post() {
