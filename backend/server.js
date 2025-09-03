@@ -20,24 +20,14 @@ import { router as githubOAuthRouter } from "./oauth/github.js";
 import { getIntegration, deleteIntegration } from "./lib/db.js";
 import { listRunsForUser, getRunFull } from "./lib/history.js";
 
+// Storage (driver-aware)
+import { putFile, getSignedUrl } from "./lib/storage.js";
+
 const app = express();
 app.use(express.json());
 app.use(cors({ origin: process.env.FRONTEND_ORIGIN || "http://localhost:5173" }));
 
-/* ---------- Uploads ---------- */
-const UPLOAD_DIR = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-app.use("/uploads", express.static(UPLOAD_DIR));
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-  filename: (_req, file, cb) => {
-    const base = file.originalname.replace(/\s+/g, "_");
-    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${base}`);
-  },
-});
-const upload = multer({ storage });
-
+/* ---------- Public base ---------- */
 const PUBLIC_BASE =
   process.env.BACKEND_PUBLIC_URL || `http://localhost:${process.env.PORT || 3001}`;
 
@@ -45,13 +35,10 @@ const PUBLIC_BASE =
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const svcPath = path.join(__dirname, "service-account.json");
 if (!fs.existsSync(svcPath)) {
-  console.error(
-    "[FIREBASE] Missing service-account.json at backend/service-account.json"
-  );
+  console.error("[FIREBASE] Missing service-account.json at backend/service-account.json");
   process.exit(1);
 }
 const svc = JSON.parse(fs.readFileSync(svcPath, "utf8"));
-
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert({
@@ -80,6 +67,7 @@ async function requireAuth(req, res, next) {
   }
 }
 
+/* ---------- Health / Me ---------- */
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/auth/me", requireAuth, (req, res) => {
   const { uid, email, name } = req.user;
@@ -125,9 +113,7 @@ app.post("/integrations/google/disconnect", requireAuth, async (req, res) => {
         process.env.GOOGLE_REDIRECT_URI
       );
       const token = g.refresh_token || g.access_token;
-      if (token) {
-        try { await oauth.revokeToken(token); } catch { /* ignore */ }
-      }
+      if (token) { try { await oauth.revokeToken(token); } catch {} }
     }
     await deleteIntegration(uid, "google");
     res.json({ ok: true });
@@ -136,17 +122,49 @@ app.post("/integrations/google/disconnect", requireAuth, async (req, res) => {
   }
 });
 
-/* ---------- Upload API ---------- */
-app.post("/upload", requireAuth, upload.single("file"), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-  const fileId = req.file.filename;
-  const url = `${PUBLIC_BASE}/uploads/${fileId}`;
-  res.json({
-    fileId, url,
-    originalName: req.file.originalname,
-    mimetype: req.file.mimetype,
-    size: req.file.size,
-  });
+/* ---------- Uploads (driver-aware) ---------- */
+const DRIVER = (process.env.STORAGE_DRIVER || "local").toLowerCase();
+const UPLOAD_DIR = path.join(process.cwd(), "uploads");
+/** Expose /uploads only when using the local driver (dev fallback). */
+if (DRIVER === "local") {
+  if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  app.use("/uploads", express.static(UPLOAD_DIR));
+}
+
+/** Memory storage → forward buffers to storage driver (local or supabase). */
+const mem = multer({ storage: multer.memoryStorage() });
+
+app.post("/upload", requireAuth, mem.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+    const { key, url } = await putFile(req.file.buffer, req.file.originalname);
+
+    res.json({
+      fileId: key,     // stable key we’ll store in run.memory.fileKey
+      url,             // for local: /uploads/... ; for supabase: a public/signed URL (not required by UI)
+      originalName: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+    });
+  } catch (e) {
+    console.error("UPLOAD error:", e);
+    res.status(500).json({ error: e.message || "upload failed" });
+  }
+});
+
+/**
+ * Public proxy → mint a short-lived signed URL and redirect.
+ * Works for both drivers: local returns a stable public URL; supabase returns a signed one.
+ */
+app.get("/files/:key", async (req, res) => {
+  try {
+    const key = req.params.key;
+    const signed = await getSignedUrl(key, 300); // 5 minutes
+    return res.redirect(signed);
+  } catch {
+    return res.status(404).send("File unavailable");
+  }
 });
 
 /* ---------- Runs API (in-memory) ---------- */
@@ -167,7 +185,10 @@ app.post("/runs", requireAuth, (req, res) => {
   }));
 
   const runs = (app.locals.runs ||= {});
-  const fileUrl = fileId ? `${PUBLIC_BASE}/uploads/${fileId}` : null;
+  // Build a stable proxy URL even in local mode; /files/:key will redirect appropriately
+  const fileUrl = fileId
+    ? `${PUBLIC_BASE.replace(/\/+$/, "")}/files/${encodeURIComponent(fileId)}`
+    : null;
 
   runs[id] = {
     id,
@@ -175,7 +196,10 @@ app.post("/runs", requireAuth, (req, res) => {
     instruction,
     steps,
     log: [],
-    memory: { ...(fileUrl ? { fileUrl } : {}) },
+    memory: {
+      ...(fileUrl ? { fileUrl } : {}),
+      ...(fileId ? { fileKey: fileId } : {}),  // <— store raw key as well
+    },
     status: "created",
     fileId: fileId || null,
     fileUrl,
@@ -203,13 +227,12 @@ app.post("/runs/:id/execute", requireAuth, async (req, res) => {
 });
 
 /* ---------- History API ---------- */
-/* ---------- History API ---------- */
 app.get("/history", requireAuth, async (req, res) => {
   try {
     const runs = await listRunsForUser(req.user.uid, { limit: 50 });
     res.json({ runs });
   } catch (e) {
-    console.error("GET /history error:", e);   // 👈 add logging
+    console.error("GET /history error:", e);
     res.status(500).json({ error: e.message });
   }
 });
@@ -220,7 +243,7 @@ app.get("/history/:id", requireAuth, async (req, res) => {
     if (!run || run.uid !== req.user.uid) return res.status(404).json({ error: "not found" });
     res.json(run);
   } catch (e) {
-    console.error("GET /history/:id error:", e);  // 👈 add logging
+    console.error("GET /history/:id error:", e);
     res.status(500).json({ error: e.message });
   }
 });
